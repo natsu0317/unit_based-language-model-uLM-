@@ -1,0 +1,7 @@
+# uLM(unit-based language model)
+
+# data
+
+`units_trains.csv, units_dev.csv`
+id: 音声ファイルの識別子
+units: 音響単位の ID(0-127)
