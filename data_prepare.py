@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
+from transformers import GPT2Config, GPT2LMHeadModel, Trainer, TrainingArguments
 
 class UnitDataset(Dataset):
     def __init__(self, csv_file, max_length=512):
@@ -90,3 +91,15 @@ def create_dataloaders(train_csv, dev_csv, batch_size=8, max_length=512):
 
     return train_loader, dev_loader
 
+
+def create_unit_language_model():
+    config = GPT2Config(
+        vocab_size=128,
+        n_positions=512,
+        n_embd=512, # 埋め込み次元
+        n_layer=6, # Transformer層数
+        n_head=8, # attentionhead数
+    )
+
+    model = GPT2LMHeadModel(config)
+    return model, config
