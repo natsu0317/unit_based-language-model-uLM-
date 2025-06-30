@@ -1,0 +1,18 @@
+# データファイル
+*.csv
+units_*.csv
+
+# モデルファイル
+*.bin
+*.safetensors
+checkpoint-*/
+unit-lm-*/
+
+# Python
+__pycache__/
+*.pyc
+
+# 環境
+.env
+.venv
+venv/
