@@ -7,7 +7,9 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     TrainingArguments,
-    Trainer
+    Trainer,
+    GPT2Config,
+    GPT2LMHeadModel,
 )
 import time
 
@@ -122,24 +124,74 @@ def create_unit_language_model():
 
 
 def create_qwen_unit_lm(vocab_size=128, model_name="Qwen/Qwen2.5-3B"):
-    config = AutoConfig.from_pretrained(model_name)
+    
+    original_model = AutoModelForCausalLM.from_pretrained(model_name)
+    original_config = original_model.config
+    
+    
+    new_config = AutoConfig.from_pretrained(model_name)
+    new_config.vocab_size = vocab_size  # 151,936->128に変更
+    # new_config.max_position_embeddings = 1024
 
-    config.vocab_size = vocab_size
-    config.max_position_embeddings = 1024
+    new_model = AutoModelForCausalLM.from_config(new_config)
 
-    model = AutoModelForCausalLM.from_pretrained(model_name, config=config)
-    model.resize_token_embeddings(vocab_size)
+    
+    original_state_dict = original_model.state_dict()
+    new_state_dict = new_model.state_dict()
 
-    return model, config
+
+
+    return model, 
+    copied_layers = 0
+    skipped_layers = 0
+    
+    for name, param in original_state_dict.items():
+        if name in new_state_dict:
+            if param.shape == new_state_dict[name].shape:
+                # 形状が同じ場合はコピー
+                new_state_dict[name].copy_(param)
+                copied_layers += 1
+            else:
+                # 形状が違う場合（主に埋め込み層）はスキップ
+                print(f"  ⚠️ スキップ: {name} (形状不一致)")
+                skipped_layers += 1
+        else:
+            print(f"  ⚠️ 見つからない: {name}")
+    
+    print(f"  ✅ コピー完了: {copied_layers} 層")
+    print(f"  ⚠️ スキップ: {skipped_layers} 層")
+    
+    # === Step 5: 埋め込み層の初期化 ===
+    print("🎲 埋め込み層を初期化...")
+    
+    # 新しい埋め込み層を適切に初期化
+    if hasattr(new_model, 'transformer') and hasattr(new_model.transformer, 'wte'):
+        # GPT系の場合
+        embedding_layer = new_model.transformer.wte
+    elif hasattr(new_model, 'model') and hasattr(new_model.model, 'embed_tokens'):
+        # Qwen系の場合
+        embedding_layer = new_model.model.embed_tokens
+    else:
+        print("  ⚠️ 埋め込み層が見つかりません")
+        embedding_layer = None
+    
+    if embedding_layer is not None:
+        # Xavier初期化
+        torch.nn.init.xavier_uniform_(embedding_layer.weight)
+        print(f"  ✅ 埋め込み層初期化完了: {embedding_layer.weight.shape}")
+    
+    print("✅ モデル作成完了!")
+
+    return new_model, new_config
 
 def setup_training(model, train_dataset, dev_dataset):
     training_args = TrainingArguments(
-        output_dif="./qwen-unit-lm",
-        overwrite_outputdir=True,
+        output_dir="./qwen-unit-lm",
+        overwrite_output_dir=True,
 
         num_train_epochs=10,
-        per_device_train_batch_size=4,  # Qwenは大きいのでバッチサイズ小さめ
-        per_device_eval_batch_size=4,
+        per_device_train_batch_size=32,  # Qwenは大きいのでバッチサイズ小さめ
+        per_device_eval_batch_size=32,
         gradient_accumulation_steps=8,   # 実効バッチサイズ = 4 * 8 = 32
         
         # 最適化
@@ -167,76 +219,56 @@ def setup_training(model, train_dataset, dev_dataset):
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_datset=dev_dataset,
+        eval_dataset=dev_dataset,
     )
 
     return trainer
 
 
-
 def train_unit_language_model():
+    """Unit Language Modelの学習"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🚀 Using device: {device}")
+    
     if torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name(0)}")
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
     
+    # データセット作成
+    print("📚 データセット作成中...")
     train_dataset = UnitDataset('units_train.csv', max_length=1024)
     dev_dataset = UnitDataset('units_dev.csv', max_length=1024)
     print(f"Train samples: {len(train_dataset)}")
     print(f"Dev samples: {len(dev_dataset)}")
-
-
-    model, config = create_unit_language_model()
+    
+    # モデル作成
+    print("🤖 モデル作成中...")
+    model, config = create_qwen_unit_lm(
+        vocab_size=128,
+        model_name="Qwen/Qwen2.5-3B"
+    )
     model.to(device)
-
-    data_collator = create_collate_fn(pad_token_id=0) # 0埋め
-
-    training_args = TrainingArguments(
-        output_dir='./unit-lm-results', 
-        overwrite_output_dir = True, # 既存directoryを上書き
-
-        num_train_epochs=3,
-        per_device_train_batch_size=16,
-        per_device_eval_batch_size=16,
-        learning_rate=5e-4, # 学習率
-        weight_decay=0.01,
-
-        eval_strategy="steps",
-        eval_steps=500,
-        save_strategy="steps",
-        save_steps=1000,
-
-        logging_dir='./unit-lm-logs',
-        logging_steps=100,
-
-        dataloader_num_workers=4, # 並列処理
-        remove_unused_columns=False,
-        fp16=True,  # GPU高速化
-        dataloader_pin_memory=True,  # GPU最適化
-        gradient_checkpointing=True,
-    )
-
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=dev_dataset,
-        data_collator=data_collator,
-    )
-
-    start_time = time.time()
-
+    
+    # 学習設定
+    print("⚙️ 学習設定中...")
+    trainer = setup_training(model, train_dataset, dev_dataset)
+    
+    # 学習前評価
+    print("📊 学習前評価...")
     eval_results = trainer.evaluate()
     print(f"学習前の損失: {eval_results['eval_loss']:.4f}")
     print(f"学習前のPerplexity: {np.exp(eval_results['eval_loss']):.2f}")
     
+    # 学習開始
+    print("🚀 学習開始...")
+    start_time = time.time()
+    
     trainer.train()
-    print("\\学習完了")
+    
     end_time = time.time()
     training_time = end_time - start_time
-    print(f"\n学習完了 (所要時間: {training_time/60:.1f}分)")
-        
+    print(f"\\n学習完了 (所要時間: {training_time/60:.1f}分)")  # 修正: \\n → \n
+    
     # 最終評価
     print("\\n最終評価...")
     final_eval = trainer.evaluate()
@@ -244,9 +276,12 @@ def train_unit_language_model():
     print(f"最終Perplexity: {np.exp(final_eval['eval_loss']):.2f}")
     
     # モデル保存
-    trainer.save_model("./unit-lm-final")
+    print("💾 モデル保存中...")
+    trainer.save_model("./qwen-unit-lm-final")
+    print("✅ 学習完了!")
     
     return trainer, model
+
 
 def quick_test():
     max_length = 1024
@@ -272,18 +307,7 @@ def quick_test():
 if __name__ == "__main__":
     print("🚀 Unit-based Language Model")
 
-    model, config = create_qwen_unit_lm(
-        vocab_size=128,
-        model_name="Qwen/Qwen2.5-3B"
-    )
 
-    train_dataset = UnitDataset('units_train.csv')
-    dev_dataset = UnitDataset('units_dev.csv')
-
-    trainer = setup_training(model, train_dataset, dev_dataset)
-
-    trainer.train()
-
-    trainer.save_model("./qwen-unit-lm-final")
+    trainer, model = train_unit_language_model()
 
     
