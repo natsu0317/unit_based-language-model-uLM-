@@ -1,12 +1,13 @@
 import torch
-from transformers import AutoModelForCausalLM
+from transformers import GPT2LMHeadModel
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-model = AutoModelForCausalLM.from_pretrained(
-           "ulm-gpt2-scratch-final", torch_dtype=torch.bfloat16
-        ).to(DEVICE)
-model.eval()
+
+model = GPT2LMHeadModel.from_pretrained(
+    "./ulm-gpt2-scratch-final",
+    torch_dtype=torch.float16 if DEVICE=="cuda" else torch.float32
+).to(DEVICE)
 
 prompt = torch.tensor([[1, 20, 11, 7]], device=DEVICE)
-out = model.generate(prompt, max_length=30, do_sample=True, top_p=0.9)
-print("generated IDs:", out[0].tolist())
+out = model.generate(prompt, max_length=30, top_p=0.9, do_sample=True)
+print(out[0].tolist())
